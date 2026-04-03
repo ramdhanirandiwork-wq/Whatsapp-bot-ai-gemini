@@ -1,90 +1,78 @@
+import express from "express";
 import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
-
 import pino from "pino";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import "dotenv/config";
 
-const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-let isPairing = false; // 🔥 kunci biar tidak dobel
+// 🔥 WAJIB: biar Render tidak timeout
+app.get("/", (req, res) => {
+  res.status(200).send("🤖 Bot WhatsApp Gemini Aktif!");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
+});
+
+// ================= BOT =================
 
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth");
+  console.log("🚀 Memulai bot...");
+
+  const { state, saveCreds } = await useMultiFileAuthState("session");
+
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
+    version,
     auth: state,
-    logger: pino({ level: "silent" }),
+    printQRInTerminal: false,
+    logger: pino({ level: "silent" })
   });
 
-  // ✅ Pairing hanya SEKALI
-  if (!state.creds.registered && !isPairing) {
-    isPairing = true;
-
-    console.log("🔥 Ambil pairing code...");
-
-    const code = await sock.requestPairingCode(process.env.WA_NUMBER!);
-    console.log("✅ PAIRING CODE:", code);
-
-    console.log("⚠️ Masukkan code SEKARANG (jangan nunggu)");
-  }
-
+  // simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message) return;
-
-    const sender = msg.key.remoteJid!;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text;
-
-    if (!text) return;
-
-    try {
-      const model = genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
-      });
-
-      const result = await model.generateContent(text);
-      const reply = result.response.text();
-
-      await sock.sendMessage(sender, { text: reply });
-    } catch {
-      await sock.sendMessage(sender, {
-        text: "AI error, coba lagi nanti",
-      });
-    }
-  });
-
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect } = update;
+  // status koneksi
+  sock.ev.on("connection.update", async (update) => {
+    const { connection } = update;
 
     if (connection === "close") {
-      const code =
-        (lastDisconnect?.error as any)?.output?.statusCode;
-
-      console.log("❌ Disconnect:", code);
-
-      // ❗ STOP TOTAL saat pairing
-      if (!state.creds.registered) {
-        console.log("⛔ STOP (lagi pairing, jangan reconnect)");
-        return;
-      }
-
-      if (code !== DisconnectReason.loggedOut) {
-        console.log("🔄 Reconnect...");
-        startBot();
-      }
+      console.log("❌ Koneksi terputus, reconnect...");
+      startBot();
     }
 
     if (connection === "open") {
-      console.log("✅ Bot connected!");
+      console.log("✅ BOT TERHUBUNG!");
+
+      // kirim notif ke nomor kamu
+      await sock.sendMessage("6283109862325@s.whatsapp.net", {
+        text: "✅ Bot WhatsApp berhasil aktif 🚀"
+      });
     }
   });
+
+  // 🔥 FIX ERROR 428 (WAJIB DELAY)
+  setTimeout(async () => {
+    try {
+      if (!sock.authState.creds.registered) {
+        console.log("🔥 Ambil pairing code...");
+
+        const code = await sock.requestPairingCode("6281399941143");
+
+        console.log("\n========================================");
+        console.log("🔥 CONNECT TO HP NO: 6281399941143");
+        console.log("🔥 KODE PAIRING:", code);
+        console.log("========================================\n");
+      }
+    } catch (err) {
+      console.log("❌ Pairing gagal, retry...");
+      setTimeout(startBot, 5000);
+    }
+  }, 5000);
 }
 
 startBot();
