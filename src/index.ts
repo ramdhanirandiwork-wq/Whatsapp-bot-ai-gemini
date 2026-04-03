@@ -2,25 +2,39 @@ import makeWASocket, {
     DisconnectReason, 
     useMultiFileAuthState, 
     fetchLatestBaileysVersion, 
-    makeCacheableSignalKeyStore 
+    makeCacheableSignalKeyStore,
+    WAMessage
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import express from "express";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- FIX PORT DETECTION ---
+// --- 1. FIX PORT & SERVER (Mencegah Restart Loop) ---
 const app = express();
-const PORT = parseInt(process.env.PORT || "10000", 10); // Pastikan jadi angka
+const PORT = parseInt(process.env.PORT || "10000", 10); // Konversi string ke number agar tidak error build
 
-app.get('/', (req, res) => res.status(200).send('BOT_READY'));
+app.get('/', (req, res) => {
+    res.status(200).send('BOT_ACTIVE');
+});
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌐 Server berjalan stabil di port ${PORT}`);
+    console.log(`🌐 Server aktif di port ${PORT}`);
+});
+
+// --- 2. KONFIGURASI AI ---
+const genAI = new GoogleGenerativeAI(process.env.API_KEY || "");
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash",
+    systemInstruction: `You are the "STOCK OPNAME TERMINAL LAMA" Exclusive Inventory Assistant.
+1. ZERO CONVERSATION: Only code blocks for results.
+2. INITIAL TRIGGER: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:"
+3. LOGIC: Date Tomorrow. Numbered Checklist.`,
 });
 
 async function startBot() {
-    // Gunakan folder baru agar sesi benar-benar segar
-    const { state, saveCreds } = await useMultiFileAuthState("auth_session_final");
+    // Gunakan folder 'auth_success' agar tidak bentrok dengan sesi gagal sebelumnya
+    const { state, saveCreds } = await useMultiFileAuthState("auth_success");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -31,37 +45,64 @@ async function startBot() {
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: ["TerminalLama", "Chrome", "1.0.0"],
         connectTimeoutMs: 60000,
     });
 
+    // --- LOGIKA PAIRING ---
     if (!sock.authState.creds.registered) {
-        const phoneNumber = process.env.WA_NUMBER;
+        const phoneNumber = process.env.WA_NUMBER; // Pastikan di Render: 6281399941143
         
-        // Jeda 10 detik agar Render benar-atstabil
+        console.log(`🕒 Menunggu 15 detik untuk memunculkan kode pairing...`);
+        
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(phoneNumber!);
-                console.log(`\n========================================`);
-                console.log(`🔥 KODE PAIRING: ${code}`);
-                console.log(`========================================\n`);
+                if (!sock.authState.creds.registered) {
+                    const code = await sock.requestPairingCode(phoneNumber!);
+                    console.log(`\n========================================`);
+                    console.log(`🔥 KODE PAIRING ANDA: ${code}`);
+                    console.log(`========================================\n`);
+                }
             } catch (err) {
-                console.log("❌ Gagal request kode. Tunggu 15 menit.");
+                console.log("❌ Limit WhatsApp. Tunggu 30 menit.");
             }
-        }, 10000); 
+        }, 15000);
     }
 
     sock.ev.on("creds.update", saveCreds);
 
+    // --- HANDLER PESAN ---
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg: WAMessage = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+        const jid = msg.key.remoteJid!;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        
+        if (text?.toLowerCase() === "p" || text?.toLowerCase() === "cek stok") {
+            await sock.sendMessage(jid, { text: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:" });
+            return;
+        }
+
+        try {
+            await sock.sendPresenceUpdate("composing", jid);
+            const result = await model.generateContent(text!);
+            await sock.sendMessage(jid, { text: result.response.text() }, { quoted: msg });
+        } catch (e) {
+            console.log("AI Error");
+        }
+    });
+
+    // --- HANDLER KONEKSI ---
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "close") {
             const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
+            console.log(`📡 Terputus (Status: ${statusCode})`);
             if (statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(() => startBot(), 5000);
+                setTimeout(() => startBot(), 10000);
             }
         } else if (connection === "open") {
-            console.log("✅ BOT CONNECTED!");
+            console.log("✅ BOT BERHASIL TERHUBUNG!");
         }
     });
 }
