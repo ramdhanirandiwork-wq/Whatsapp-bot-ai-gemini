@@ -1,104 +1,68 @@
-import express, { Request, Response } from "express";
-import axios from "axios";
-import { Client, LocalAuth, Message, MessageMedia } from "whatsapp-web.js";
-import qrcode from "qrcode-terminal";
-import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
+import makeWASocket, {
+  DisconnectReason,
+  useMultiFileAuthState
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import 'dotenv/config';
 
 const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
 
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth");
 
-const port = 5000;
+  const sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: "silent" }),
+  });
 
-async function mediaToGenerativePart(media: MessageMedia) {
-  return {
-    inlineData: { data: media.data, mimeType: media.mimetype },
-  };
-}
-
-const whatsappClient = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    args: ['--no-sandbox', '--disable-setuid-sandbox'], 
-  },
-});
-
-whatsappClient.on("qr", (qr: string) => {
-  qrcode.generate(qr, { small: true });
-  console.log("QR Code received, scan with your phone.");
-});
-
-whatsappClient.on("ready", () => {
-  console.log("WhatsApp Web client is ready!");
-});
-
-whatsappClient.on("message", async (msg: Message) => {
-  const senderNumber: string = msg.from;
-  const message: string = msg.body;
-
-  console.log(`Received message from ${senderNumber}: ${message}`);
-
-  let mediaPart = null;
-
-  if (msg.hasMedia) {
-    const media = await msg.downloadMedia();
-    mediaPart = await mediaToGenerativePart(media);
+  // ✅ PAIRING CODE
+  if (process.env.PAIRING_CODE === "true") {
+    const code = await sock.requestPairingCode(process.env.WA_NUMBER!);
+    console.log("PAIRING CODE:", code);
   }
 
-  await run(message, senderNumber, mediaPart);
-});
+  sock.ev.on("creds.update", saveCreds);
 
-whatsappClient.initialize();
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg.message) return;
 
-let chat: ChatSession | null = null;
+    const sender = msg.key.remoteJid!;
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text;
 
-async function run(message: string, senderNumber: string, mediaPart?: any): Promise<void> {
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    if (!text) return;
 
-    if (!chat) {
-      chat = model.startChat({
-        generationConfig: {
-          maxOutputTokens: 500,
-        },
-      });
-    }
-    let prompt: any[] = [];
+    console.log("Message:", text);
 
-    prompt.push(message);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+    });
 
-    if (mediaPart) {
-      prompt.push(mediaPart);
-    }
-    
-    const result = await chat.sendMessage(prompt);
+    const result = await model.generateContent(text);
     const response = await result.response;
-    const text: string = response.text();
+    const reply = response.text();
 
+    await sock.sendMessage(sender, { text: reply });
+  });
 
-    if (text) {
-      console.log("Generated Text:", text);
-      await sendWhatsAppMessage(text, senderNumber);
-    } else {
-      console.error("This problem is related to Model Limitations and API Rate Limits");
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect } = update;
+
+    if (connection === "close") {
+      const shouldReconnect =
+        (lastDisconnect?.error as any)?.output?.statusCode !==
+        DisconnectReason.loggedOut;
+
+      if (shouldReconnect) startBot();
     }
 
-  } catch (error) {
-    console.error("Error in run function:", error);
-    await sendWhatsAppMessage("Oops, an error occurred. Please try again later.", senderNumber);
-  }
+    if (connection === "open") {
+      console.log("Bot connected!");
+    }
+  });
 }
 
-async function sendWhatsAppMessage(text: string, toNumber: string): Promise<void> {
-  try {
-    await whatsappClient.sendMessage(toNumber, text);
-  } catch (err) {
-    console.error("Failed to send WhatsApp message:");
-    console.error("Error details:", err);
-  }
-}
-
-app.listen(port, () => console.log(`Express app running on port ${port}!`));
+startBot();
