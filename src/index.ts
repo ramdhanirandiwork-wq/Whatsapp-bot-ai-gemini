@@ -1,7 +1,7 @@
-import makeWASocket, { 
-    DisconnectReason, 
-    useMultiFileAuthState, 
-    fetchLatestBaileysVersion, 
+import makeWASocket, {
+    DisconnectReason,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     WAMessage
 } from "@whiskeysockets/baileys";
@@ -10,99 +10,130 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- 1. SETTING OWNER & SERVER ---
-const OWNER_NUMBER = "6283109862325@s.whatsapp.net"; 
-const app = express();
+// ================== CONFIG ==================
+const OWNER_NUMBER = "6283109862325@s.whatsapp.net";
 const PORT = process.env.PORT || 3000;
 
-app.get('/', (req, res) => res.send('Bot Status: Online ✅'));
+// ================== EXPRESS ==================
+const app = express();
+app.get("/", (req, res) => res.send("Bot Online ✅"));
 app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
 
-// --- 2. KONFIGURASI GEMINI ---
+// 🔥 KEEP ALIVE (ANTI SLEEP RENDER)
+setInterval(() => {
+    console.log("🟢 KEEP ALIVE");
+}, 30000);
+
+// ================== GEMINI ==================
 const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
-    systemInstruction: `You are the "STOCK OPNAME TERMINAL LAMA" Assistant.
-1. Respond ONLY with code blocks for reports.
-2. Initial Trigger ("p" or "cek stok"): "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:"
-3. Inventory Data: Chili Oil, Aluminium Foil, Mika, Cup, Sumpit, Gas, Keju, Plastik, Mamayo, dll.
-4. Permanent Data: Dimsum 600, Saus Botol 4, Bolognes 2, Tar-tar 1.`
+const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash"
 });
 
+// ================== START BOT ==================
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
+    const { state, saveCreds } = await useMultiFileAuthState("/opt/render/project/src/auth");
+
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
         auth: {
             creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" }))
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: ["Ubuntu", "Chrome", "20.0.0"]
     });
 
-    // --- 3. LOGIKA PAIRING ---
+    // ================== PAIRING ==================
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
+
         if (phoneNumber) {
-            console.log(`⏳ Menyiapkan koneksi untuk nomor: ${phoneNumber}...`);
-            setTimeout(async () => {
-                try {
-                    let code = await sock.requestPairingCode(phoneNumber);
-                    console.log("\n========================================");
-                    console.log(`🔥 CONNECT TO HP NO: ${phoneNumber}`);
-                    console.log(`🔥 KODE PAIRING ANDA: ${code}`);
-                    console.log("========================================\n");
-                } catch (err) {
-                    console.error("❌ Gagal pairing.");
-                }
-            }, 10000);
+            try {
+                console.log(`⏳ Menyiapkan koneksi: ${phoneNumber}`);
+
+                const code = await sock.requestPairingCode(phoneNumber);
+
+                console.log("\n===============================");
+                console.log(`🔥 PAIRING CODE: ${code}`);
+                console.log("===============================\n");
+
+            } catch (err) {
+                console.error("❌ Pairing gagal:", err);
+            }
         }
     }
 
+    // ================== SAVE CREDS ==================
     sock.ev.on("creds.update", saveCreds);
 
-    // --- 4. HANDLER PESAN ---
+    // ================== MESSAGE HANDLER ==================
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg: WAMessage = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const jid = msg.key.remoteJid!;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text;
+
         if (!text) return;
 
         try {
+            // trigger manual
             if (text.toLowerCase() === "p" || text.toLowerCase() === "cek stok") {
-                await sock.sendMessage(jid, { text: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:" });
+                await sock.sendMessage(jid, {
+                    text: "STOCK LAPORAN KAYAME FOOD\nSilakan input laporan hari ini:"
+                });
                 return;
             }
 
             await sock.sendPresenceUpdate("composing", jid);
-            const result = await model.generateContent(text);
-            await sock.sendMessage(jid, { text: result.response.text() }, { quoted: msg });
 
-        } catch (error: any) {
-            console.error("❌ Error:", error);
-            await sock.sendMessage(OWNER_NUMBER, { text: `⚠️ *ERROR:* ${error.message}` });
+            const result = await model.generateContent(text);
+            const reply = result.response.text();
+
+            await sock.sendMessage(jid, { text: reply }, { quoted: msg });
+
+        } catch (err: any) {
+            console.error("❌ Error:", err);
+            await sock.sendMessage(OWNER_NUMBER, {
+                text: `⚠️ ERROR:\n${err.message}`
+            });
         }
     });
 
-    // --- 5. HANDLER KONEKSI ---
+    // ================== CONNECTION ==================
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
+
         if (connection === "close") {
-            const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
+            const statusCode =
+                (lastDisconnect?.error as any)?.output?.statusCode ||
+                (lastDisconnect?.error as any)?.statusCode;
+
+            console.log("❌ Disconnect:", statusCode);
+
             if (statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(() => startBot(), 5000);
+                console.log("🔄 Reconnect...");
+                startBot();
+            } else {
+                console.log("⛔ Logout, perlu pairing ulang");
             }
-        } else if (connection === "open") {
+        }
+
+        if (connection === "open") {
             console.log("✅ BOT TERHUBUNG!");
-            await sock.sendMessage(OWNER_NUMBER, { text: "🚀 *LAPORAN:* Bot sudah AKTIF kembali." });
+
+            // 🔥 KIRIM NOTIF KE OWNER
+            await sock.sendMessage(OWNER_NUMBER, {
+                text: "🚀 Bot WhatsApp Gemini aktif & terhubung!"
+            });
         }
     });
 }
 
-startBot().catch(err => console.error("Fatal:", err));
+startBot().catch(err => console.error("FATAL:", err));
