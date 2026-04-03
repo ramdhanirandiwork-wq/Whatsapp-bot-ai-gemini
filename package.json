@@ -8,8 +8,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.6.0",
-    "express": "^4.19.2",
-    "pino": "^8.17.0"
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "18.19.0",
