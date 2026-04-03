@@ -7,22 +7,22 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import express from "express";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- 1. WEB SERVER UNTUK RENDER (Fix Port Binding) ---
+// --- 1. WEB SERVER UNTUK RENDER ---
 const app = express();
-const PORT = process.env.PORT || 10000;
+// Mengubah PORT ke number agar tidak error saat build
+const PORT = Number(process.env.PORT) || 10000;
 
 app.get('/', (req, res) => res.send('Terminal Lama Inventory Bot is Online ✅'));
 
-// Menggunakan host '0.0.0.0' agar Render bisa mendeteksi port dan tidak timeout
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Server berjalan di port ${PORT}`);
 });
 
-// --- 2. KONFIGURASI AI GEMINI DENGAN SYSTEM ROLE & SAFETY SETTINGS ---
-const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
+// --- 2. KONFIGURASI AI GEMINI ---
+const genAI = new GoogleGenerativeAI(process.env.API_KEY || "");
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash",
     systemInstruction: `You are the "STOCK OPNAME TERMINAL LAMA" Exclusive Inventory Assistant.
@@ -44,12 +44,11 @@ const model = genAI.getGenerativeModel({
    - PERMANENT ITEMS: Dimsum 600 Pcs, Saus Botol 4, Bolognes 2, Tar-tar 1.
    - SAUS KOMPAN: If input < 1/2 or "habis" -> "[ ] Saus Kompan 🛢️: 1 Kompan".
    - CALCULATION: (Target - Input). If Input >= Target, do not display.`,
-    // Mencegah AI menolak pesan karena dianggap konten sensitif (inventaris bisnis)
     safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
     ],
 });
 
@@ -65,34 +64,26 @@ async function startBot() {
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        // Nama browser agar lebih stabil di server
         browser: ["Terminal Lama Bot", "Chrome", "1.0.0"],
     });
 
-    // --- PAIRING CODE LOGIC ---
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
-        if (!phoneNumber) {
-            console.error("❌ WA_NUMBER belum diisi di Environment Variables!");
-            return;
-        }
+        if (!phoneNumber) return;
 
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(`\n========================================`);
-                console.log(`🔥 KODE PAIRING ANDA: ${code}`);
-                console.log(`========================================\n`);
+                console.log(`\n🔥 KODE PAIRING ANDA: ${code}\n`);
             } catch (err) { 
-                console.error("❌ Gagal mengambil pairing code. Cek koneksi."); 
+                console.error("Gagal ambil code."); 
             }
         }, 6000);
     }
 
     sock.ev.on("creds.update", saveCreds);
 
-    // --- MESSAGE HANDLER ---
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg: WAMessage = messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -102,7 +93,6 @@ async function startBot() {
         
         if (!text) return;
 
-        // Trigger Pancingan
         if (text.toLowerCase() === "p" || text.toLowerCase() === "cek stok") {
             await sock.sendMessage(jid, { text: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:" });
             return;
@@ -112,32 +102,23 @@ async function startBot() {
             await sock.sendPresenceUpdate("composing", jid);
             const result = await model.generateContent(text);
             const responseText = result.response.text();
-            
-            // Kirim hasil checklist ke WA
             await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
         } catch (error) {
-            console.error("Gemini Error:", error);
-            await sock.sendMessage(jid, { text: "Maaf, sistem AI sedang sibuk. Coba kirim data stok lagi." });
+            await sock.sendMessage(jid, { text: "Maaf, sistem AI sedang sibuk." });
         }
     });
 
-    // --- CONNECTION HANDLER ---
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "close") {
             const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
-            
-            // Reconnect jika bukan karena logout sengaja
             if (statusCode !== DisconnectReason.loggedOut) {
-                console.log("🔄 Koneksi terputus, mencoba menyambung ulang...");
                 setTimeout(() => startBot(), 5000);
-            } else {
-                console.log("⛔ Logout terdeteksi. Silakan pairing ulang.");
             }
         } else if (connection === "open") {
-            console.log("✅ BOT TERMINAL LAMA SUDAH AKTIF DAN TERHUBUNG!");
+            console.log("✅ BOT TERMINAL LAMA AKTIF!");
         }
     });
 }
 
-startBot().catch(err => console.error("Fatal Error:", err));
+startBot().catch(err => console.error(err));
