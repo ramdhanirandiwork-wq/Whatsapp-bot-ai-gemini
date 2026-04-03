@@ -1,96 +1,111 @@
 import makeWASocket, {
   DisconnectReason,
-  useMultiFileAuthState
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  jidDecode
 } from "@whiskeysockets/baileys";
-
 import pino from "pino";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import express from "express";
 import "dotenv/config";
 
-const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
+// --- KONFIGURASI WEB SERVER (Agar tidak kena suspend/sleep di Render) ---
+const app = express();
+const port = process.env.PORT || 3000;
+app.get("/", (req, res) => res.send("Bot Gemini Aktif 24 Jam!"));
+app.listen(port, () => console.log(`🌐 Server berjalan di port ${port}`));
+
+// --- KONFIGURASI GEMINI ---
+const genAI = new GoogleGenerativeAI(process.env.API_KEY || "");
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
+    version,
     auth: state,
     logger: pino({ level: "silent" }),
+    printQRInTerminal: false, // Kita pakai Pairing Code
+    browser: ["Ubuntu", "Chrome", "20.0.04"], // Biar terbaca sebagai perangkat Desktop
   });
 
-  // ✅ PAIRING CODE (CUMA SEKALI)
+  // --- LOGIKA PAIRING CODE ---
   if (!state.creds.registered) {
-    console.log("🔥 Ambil pairing code...");
+    const phoneNumber = process.env.WA_NUMBER;
+    if (!phoneNumber) {
+      console.error("❌ ERROR: WA_NUMBER tidak ditemukan di .env!");
+      process.exit(1);
+    }
 
-    const code = await sock.requestPairingCode(process.env.WA_NUMBER!);
-    console.log("✅ PAIRING CODE:", code);
-
-    console.log("⚠️ Masukkan code ke WhatsApp SEKARANG!");
+    setTimeout(async () => {
+      try {
+        console.log("🔥 Mengambil Pairing Code untuk:", phoneNumber);
+        const code = await sock.requestPairingCode(phoneNumber);
+        console.log("\n===============================");
+        console.log("✅ PAIRING CODE ANDA:", code);
+        console.log("===============================\n");
+        console.log("⚠️ Masukkan kode di atas ke WhatsApp (Tautkan Perangkat > Tautkan dengan nomor telepon)");
+      } catch (e) {
+        console.error("❌ Gagal mengambil pairing code", e);
+      }
+    }, 3000); // Jeda 3 detik agar socket benar-benar siap
   }
 
-  // simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  // terima pesan
+  // --- HANDLER PESAN ---
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
-    if (!msg.message) return;
+    if (!msg.message || msg.key.fromMe) return; // Abaikan jika pesan dari bot sendiri
 
-    const sender = msg.key.remoteJid!;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text;
+    const sender = msg.key.remoteJid;
+    const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
     if (!text) return;
+    console.log(`📩 Dari: ${sender} | Pesan: ${text}`);
 
-    console.log("📩 Message:", text);
+    // Tampilkan status "Sedang mengetik..." di WhatsApp
+    await sock.sendPresenceUpdate("composing", sender);
 
     try {
-      const model = genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
-      });
-
       const result = await model.generateContent(text);
       const response = await result.response;
-      const reply = response.text();
+      const replyText = response.text();
 
-      await sock.sendMessage(sender, { text: reply });
+      await sock.sendMessage(sender, { text: replyText }, { quoted: msg });
     } catch (err) {
-      console.log("❌ Error AI:", err);
-      await sock.sendMessage(sender, {
-        text: "Maaf, AI lagi error 😅",
-      });
+      console.error("❌ Error AI:", err);
+      await sock.sendMessage(sender, { text: "Aduh, otak saya lagi konslet sebentar.. 😅" });
     }
   });
 
-  // koneksi handler
+  // --- HANDLER KONEKSI ---
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect } = update;
 
     if (connection === "close") {
-      const statusCode =
-        (lastDisconnect?.error as any)?.output?.statusCode;
+      const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+      console.log("❌ Koneksi terputus. Status:", statusCode);
 
-      console.log("❌ Koneksi terputus:", statusCode);
-
-      // ❗ JANGAN reconnect saat belum pairing
-      if (!state.creds.registered) {
-        console.log("⛔ Stop reconnect (lagi pairing)");
-        return;
-      }
-
-      // ✅ reconnect kalau sudah login
-      if (statusCode !== DisconnectReason.loggedOut) {
+      // Logika Reconnect yang lebih pintar
+      if (statusCode === 428) {
+        console.log("🔄 Precondition Required (428). Mencoba reconnect otomatis...");
+        setTimeout(() => startBot(), 5000);
+      } else if (statusCode !== DisconnectReason.loggedOut) {
         console.log("🔄 Reconnecting...");
         startBot();
       } else {
-        console.log("🚫 Logout, scan ulang");
+        console.log("🚫 Sesi berakhir (Logout). Hapus folder /auth dan scan ulang.");
       }
     }
 
     if (connection === "open") {
-      console.log("✅ Bot connected!");
+      console.log("\n🚀 BOT TERHUBUNG DENGAN SUKSES!");
     }
   });
 }
 
-startBot();
+// Jalankan bot
+startBot().catch((err) => console.error("Fatal Error:", err));
