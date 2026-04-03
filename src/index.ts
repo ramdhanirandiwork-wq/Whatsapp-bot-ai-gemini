@@ -9,10 +9,10 @@ import pino from "pino";
 import express from "express";
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import "dotenv/config";
+import fs from "fs"; // Import untuk menghapus folder
 
 // --- 1. WEB SERVER UNTUK RENDER ---
 const app = express();
-// Mengubah PORT ke number agar tidak error saat build
 const PORT = Number(process.env.PORT) || 10000;
 
 app.get('/', (req, res) => res.send('Terminal Lama Inventory Bot is Online ✅'));
@@ -53,6 +53,17 @@ const model = genAI.getGenerativeModel({
 });
 
 async function startBot() {
+    // --- SKRIP PENGHANCUR SESI RUSAK (Khusus Akun Free) ---
+    // Menghapus folder auth sebelum start agar pairing ulang selalu bersih
+    if (fs.existsSync("./auth")) {
+        try {
+            fs.rmSync("./auth", { recursive: true, force: true });
+            console.log("🧹 FOLDER AUTH LAMA DIHAPUS OTOMATIS!");
+        } catch (e) {
+            console.log("⚠️ Gagal menghapus folder auth, mungkin sedang digunakan.");
+        }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
@@ -69,13 +80,18 @@ async function startBot() {
 
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
-        if (!phoneNumber) return;
+        if (!phoneNumber) {
+            console.log("❌ WA_NUMBER TIDAK DITEMUKAN DI ENV");
+            return;
+        }
 
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(`\n🔥 KODE PAIRING ANDA: ${code}\n`);
+                console.log(`\n========================================`);
+                console.log(`🔥 KODE PAIRING ANDA: ${code}`);
+                console.log(`========================================\n`);
             } catch (err) { 
                 console.error("Gagal ambil code."); 
             }
@@ -116,9 +132,10 @@ async function startBot() {
                 setTimeout(() => startBot(), 5000);
             }
         } else if (connection === "open") {
-            console.log("✅ BOT TERMINAL LAMA AKTIF!");
+            console.log("✅ BOT TERMINAL LAMA AKTIF DAN TERHUBUNG!");
         }
     });
 }
 
+// Jalankan Bot
 startBot().catch(err => console.error(err));
