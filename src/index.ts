@@ -3,14 +3,13 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
-import pino from "pino";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔥 WAJIB: biar Render tidak timeout
+// 🔥 anti render timeout
 app.get("/", (req, res) => {
-  res.status(200).send("🤖 Bot WhatsApp Gemini Aktif!");
+  res.status(200).send("🤖 Bot WhatsApp Aktif!");
 });
 
 app.listen(PORT, () => {
@@ -23,26 +22,24 @@ async function startBot() {
   console.log("🚀 Memulai bot...");
 
   const { state, saveCreds } = await useMultiFileAuthState("session");
-
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: false,
-    logger: pino({ level: "silent" })
+    printQRInTerminal: false
   });
 
   // simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  // status koneksi
+  // koneksi
   sock.ev.on("connection.update", async (update) => {
     const { connection } = update;
 
     if (connection === "close") {
       console.log("❌ Koneksi terputus, reconnect...");
-      startBot();
+      setTimeout(startBot, 5000);
     }
 
     if (connection === "open") {
@@ -55,7 +52,7 @@ async function startBot() {
     }
   });
 
-  // 🔥 FIX ERROR 428 (WAJIB DELAY)
+  // 🔥 FIX pairing delay (anti error 428)
   setTimeout(async () => {
     try {
       if (!sock.authState.creds.registered) {
@@ -69,7 +66,7 @@ async function startBot() {
         console.log("========================================\n");
       }
     } catch (err) {
-      console.log("❌ Pairing gagal, retry...");
+      console.log("❌ Pairing gagal, retry 5 detik...");
       setTimeout(startBot, 5000);
     }
   }, 5000);
