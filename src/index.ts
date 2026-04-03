@@ -10,13 +10,18 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- 1. WEB SERVER UNTUK RENDER (Agar Tidak Sleep/Idle) ---
+// --- 1. WEB SERVER UNTUK RENDER (Fix Port Binding) ---
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Terminal Lama Inventory Bot is Online ✅'));
-app.listen(PORT, () => console.log(`🌐 Server berjalan di port ${PORT}`));
 
-// --- 2. KONFIGURASI AI GEMINI DENGAN SYSTEM ROLE ---
+app.get('/', (req, res) => res.send('Terminal Lama Inventory Bot is Online ✅'));
+
+// Menggunakan host '0.0.0.0' agar Render bisa mendeteksi port dan tidak timeout
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Server berjalan di port ${PORT}`);
+});
+
+// --- 2. KONFIGURASI AI GEMINI DENGAN SYSTEM ROLE & SAFETY SETTINGS ---
 const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash",
@@ -38,7 +43,14 @@ const model = genAI.getGenerativeModel({
    - NUMBERED CHECKLIST: sequential numbers.
    - PERMANENT ITEMS: Dimsum 600 Pcs, Saus Botol 4, Bolognes 2, Tar-tar 1.
    - SAUS KOMPAN: If input < 1/2 or "habis" -> "[ ] Saus Kompan 🛢️: 1 Kompan".
-   - CALCULATION: (Target - Input). If Input >= Target, do not display.`
+   - CALCULATION: (Target - Input). If Input >= Target, do not display.`,
+    // Mencegah AI menolak pesan karena dianggap konten sensitif (inventaris bisnis)
+    safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+    ],
 });
 
 async function startBot() {
@@ -53,17 +65,28 @@ async function startBot() {
         },
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["TerminalLama", "Chrome", "20.0.04"],
+        // Nama browser agar lebih stabil di server
+        browser: ["Terminal Lama Bot", "Chrome", "1.0.0"],
     });
 
     // --- PAIRING CODE LOGIC ---
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
+        if (!phoneNumber) {
+            console.error("❌ WA_NUMBER belum diisi di Environment Variables!");
+            return;
+        }
+
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(phoneNumber!);
-                console.log(`\n🔥 KODE PAIRING ANDA: ${code}\n`);
-            } catch (err) { console.error("Gagal mengambil pairing code."); }
+                let code = await sock.requestPairingCode(phoneNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(`\n========================================`);
+                console.log(`🔥 KODE PAIRING ANDA: ${code}`);
+                console.log(`========================================\n`);
+            } catch (err) { 
+                console.error("❌ Gagal mengambil pairing code. Cek koneksi."); 
+            }
         }, 6000);
     }
 
@@ -103,12 +126,16 @@ async function startBot() {
         const { connection, lastDisconnect } = update;
         if (connection === "close") {
             const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut && state.creds.registered) {
-                console.log("🔄 Reconnecting...");
+            
+            // Reconnect jika bukan karena logout sengaja
+            if (statusCode !== DisconnectReason.loggedOut) {
+                console.log("🔄 Koneksi terputus, mencoba menyambung ulang...");
                 setTimeout(() => startBot(), 5000);
+            } else {
+                console.log("⛔ Logout terdeteksi. Silakan pairing ulang.");
             }
         } else if (connection === "open") {
-            console.log("✅ BOT TERMINAL LAMA SUDAH AKTIF!");
+            console.log("✅ BOT TERMINAL LAMA SUDAH AKTIF DAN TERHUBUNG!");
         }
     });
 }
