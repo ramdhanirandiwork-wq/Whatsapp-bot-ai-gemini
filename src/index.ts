@@ -17,17 +17,20 @@ async function startBot() {
     logger: pino({ level: "silent" }),
   });
 
-  // ✅ Pairing Code (sekali saja)
+  // ✅ PAIRING CODE (CUMA SEKALI)
   if (!state.creds.registered) {
-    console.log("Ambil pairing code...");
+    console.log("🔥 Ambil pairing code...");
+
     const code = await sock.requestPairingCode(process.env.WA_NUMBER!);
-    console.log("PAIRING CODE:", code);
+    console.log("✅ PAIRING CODE:", code);
+
+    console.log("⚠️ Masukkan code ke WhatsApp SEKARANG!");
   }
 
   // simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  // auto reply AI
+  // terima pesan
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message) return;
@@ -39,52 +42,53 @@ async function startBot() {
 
     if (!text) return;
 
-    console.log("Message:", text);
+    console.log("📩 Message:", text);
 
     try {
       const model = genAI.getGenerativeModel({
         model: "gemini-1.5-flash",
       });
 
-      // ✅ format hemat & stabil
-      const result = await model.generateContent({
-        contents: [
-          {
-            role: "user",
-            parts: [{ text }]
-          }
-        ]
-      });
-
-      const reply = result.response.text();
+      const result = await model.generateContent(text);
+      const response = await result.response;
+      const reply = response.text();
 
       await sock.sendMessage(sender, { text: reply });
-
     } catch (err) {
-      console.log("AI Error:", err);
-
+      console.log("❌ Error AI:", err);
       await sock.sendMessage(sender, {
-        text: "Maaf, AI lagi sibuk. Coba lagi nanti ya."
+        text: "Maaf, AI lagi error 😅",
       });
     }
   });
 
-  // reconnect
+  // koneksi handler
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect } = update;
 
     if (connection === "close") {
-      const shouldReconnect =
-        (lastDisconnect?.error as any)?.output?.statusCode !==
-        DisconnectReason.loggedOut;
+      const statusCode =
+        (lastDisconnect?.error as any)?.output?.statusCode;
 
-      console.log("Reconnect...");
+      console.log("❌ Koneksi terputus:", statusCode);
 
-      if (shouldReconnect) startBot();
+      // ❗ JANGAN reconnect saat belum pairing
+      if (!state.creds.registered) {
+        console.log("⛔ Stop reconnect (lagi pairing)");
+        return;
+      }
+
+      // ✅ reconnect kalau sudah login
+      if (statusCode !== DisconnectReason.loggedOut) {
+        console.log("🔄 Reconnecting...");
+        startBot();
+      } else {
+        console.log("🚫 Logout, scan ulang");
+      }
     }
 
     if (connection === "open") {
-      console.log("Bot connected ✅");
+      console.log("✅ Bot connected!");
     }
   });
 }
