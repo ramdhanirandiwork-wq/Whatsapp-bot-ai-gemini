@@ -8,16 +8,19 @@ import pino from "pino";
 import express from "express";
 import "dotenv/config";
 
+// --- FIX PORT DETECTION ---
 const app = express();
-const PORT = 10000;
+const PORT = parseInt(process.env.PORT || "10000", 10); // Pastikan jadi angka
 
-// Agar Render tidak me-restart bot
 app.get('/', (req, res) => res.status(200).send('BOT_READY'));
-app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Server di port ${PORT}`));
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Server berjalan stabil di port ${PORT}`);
+});
 
 async function startBot() {
-    // Pakai folder baru agar sesi benar-benar bersih
-    const { state, saveCreds } = await useMultiFileAuthState("auth_final");
+    // Gunakan folder baru agar sesi benar-benar segar
+    const { state, saveCreds } = await useMultiFileAuthState("auth_session_final");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -29,19 +32,23 @@ async function startBot() {
         printQRInTerminal: false,
         logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
+        connectTimeoutMs: 60000,
     });
 
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
-        // Jeda singkat saja agar tidak keduluan restart Render
+        
+        // Jeda 10 detik agar Render benar-atstabil
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(phoneNumber!);
-                console.log(`\n🔥 KODE PAIRING: ${code}\n`);
+                console.log(`\n========================================`);
+                console.log(`🔥 KODE PAIRING: ${code}`);
+                console.log(`========================================\n`);
             } catch (err) {
-                console.log("❌ Gagal request kode.");
+                console.log("❌ Gagal request kode. Tunggu 15 menit.");
             }
-        }, 5000); 
+        }, 10000); 
     }
 
     sock.ev.on("creds.update", saveCreds);
@@ -54,7 +61,7 @@ async function startBot() {
                 setTimeout(() => startBot(), 5000);
             }
         } else if (connection === "open") {
-            console.log("✅ BERHASIL TERHUBUNG!");
+            console.log("✅ BOT CONNECTED!");
         }
     });
 }
