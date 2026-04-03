@@ -10,100 +10,111 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- SERVER UNTUK RENDER ---
+// --- 1. WEB SERVER (WAJIB UNTUK RENDER) ---
 const app = express();
-const PORT = parseInt(process.env.PORT || "10000", 10); 
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot Status: Online ✅'));
+app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
 
-// Render akan mengecek ke sini setiap menit
-app.get('/', (req, res) => {
-    res.status(200).send('TERMINAL_LAMA_READY');
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌐 Server aktif di port ${PORT}`);
-});
-
-// --- KONFIGURASI AI ---
-const genAI = new GoogleGenerativeAI(process.env.API_KEY || "");
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
-    systemInstruction: `You are the "STOCK OPNAME TERMINAL LAMA" Exclusive Inventory Assistant.
-1. ZERO CONVERSATION: Only code blocks for results.
-2. INITIAL TRIGGER: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:"
-3. DATA TARGET: Chili Oil: 0.5 | Aluminium Foil: 1 Pack | Mika Mix 6: 1 Pack | Mika Mix 3: 1 Pack | Aluminium Small: 1 Pack | Cup Chili Oil: 5 Pack | Sumpit: 5 Pack | Garpu Buah: 3 Pack | Gas Torch: 3 Pcs | Keju Slice: 6 Pack | Mika Large: 6 Pcs | Plastik Danil: 3 Pack | Plastik PE 15: 3 Pack | Plastik PE 25: 2 Pack | Klip Saus: 2 Pack | Kertas Printer: 2 Pcs | Mamayo: 10 Pack | Prima Agung: 1 Pack | Gourmet: 1 Pack | Parsley: 1 Pack | Boncabe: 1 Pack | Saus Kompan: 1 Kompan | Isi Hekter: 3 Pack | Sarung Plastic: 1 Pack | Sarung Karet: 1 Pack | Plastik Sampah: 1 Pack | Tisu: 2 Pack | Dus Birthday: 5 Pcs | Selotip: 3 Pcs | Mayo Kewpie: 1 Pack | Aksesoris Birthday: 3 Pcs
-4. LOGIC: Date Tomorrow. Numbered Checklist. Permanent: Dimsum 600, Saus Botol 4, Bolognes 2, Tar-tar 1.`,
-});
+// --- 2. KONFIGURASI GEMINI ---
+const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 async function startBot() {
-    // Pakai folder sesi 'auth_final' agar bersih
-    const { state, saveCreds } = await useMultiFileAuthState("auth_final");
+    // Menggunakan folder 'auth' untuk menyimpan session
+    const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
         auth: {
             creds: state.creds,
+            // Cache untuk mempercepat koneksi dan mengurangi error 428
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
         },
-        printQRInTerminal: false,
+        printQRInTerminal: false, // Kita gunakan Pairing Code
         logger: pino({ level: "silent" }),
-        browser: ["TerminalLama", "Safari", "1.0.0"],
-        connectTimeoutMs: 60000,
+        // Identitas browser agar tidak dianggap spam
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
+    // --- 3. LOGIKA PAIRING CODE ---
     if (!sock.authState.creds.registered) {
-        const phoneNumber = "6281399941143"; 
-        
-        console.log(`🕒 Menyiapkan pairing nomor: ${phoneNumber}`);
-        
-        setTimeout(async () => {
-            try {
-                if (!sock.authState.creds.registered) {
-                    const code = await sock.requestPairingCode(phoneNumber);
-                    console.log(`\n========================================`);
-                    console.log(`🔥 KODE PAIRING: ${code}`);
-                    console.log(`========================================\n`);
-                }
-            } catch (err) {
-                console.log("❌ WhatsApp Limit. Tunggu 1 jam sebelum coba lagi.");
-            }
-        }, 15000); 
-    }
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-        const msg: WAMessage = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
-        const jid = msg.key.remoteJid!;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        if (!text) return;
-
-        if (text.toLowerCase() === "p" || text.toLowerCase() === "cek stok") {
-            await sock.sendMessage(jid, { text: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:" });
+        const phoneNumber = process.env.WA_NUMBER;
+        if (!phoneNumber) {
+            console.error("❌ ERROR: Isi WA_NUMBER di Environment Variables Render!");
             return;
         }
 
+        // Delay 6 detik agar koneksi socket stabil sebelum minta kode
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(phoneNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log("\n========================================");
+                console.log(`🔥 KODE PAIRING ANDA: ${code}`);
+                console.log("========================================\n");
+                console.log("⚠️ Masukkan kode ini di WhatsApp: Perangkat Tertaut > Tautkan Nomor.");
+            } catch (err) {
+                console.error("❌ Gagal mendapatkan kode pairing. Coba Restart.");
+            }
+        }, 6000);
+    }
+
+    // Simpan kredensial setiap ada perubahan
+    sock.ev.on("creds.update", saveCreds);
+
+    // --- 4. HANDLER PESAN (AI) ---
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg: WAMessage = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const jid = msg.key.remoteJid!;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        
+        if (!text) return;
+        console.log(`📩 Pesan masuk: ${text}`);
+
         try {
+            // Berikan efek "Typing..."
             await sock.sendPresenceUpdate("composing", jid);
+
             const result = await model.generateContent(text);
-            await sock.sendMessage(jid, { text: result.response.text() }, { quoted: msg });
-        } catch (e) {
-            console.log("AI Error");
+            const responseText = result.response.text();
+
+            await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+        } catch (error) {
+            console.error("❌ Gemini Error:", error);
+            await sock.sendMessage(jid, { text: "Maaf, sistem sedang sibuk. Coba lagi nanti ya! 🙏" });
         }
     });
 
+    // --- 5. HANDLER KONEKSI (ANTI-LOOP) ---
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
+
         if (connection === "close") {
-            const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut) {
-                setTimeout(() => startBot(), 10000);
+            const error = (lastDisconnect?.error as any);
+            const statusCode = error?.output?.statusCode || error?.statusCode;
+
+            console.log(`❌ Koneksi Terputus (Status: ${statusCode})`);
+
+            // Jangan reconnect otomatis jika:
+            // 1. Sedang proses pairing (biar tidak double code)
+            // 2. User logout sengaja
+            if (statusCode === DisconnectReason.loggedOut || !state.creds.registered) {
+                console.log("⛔ Reconnect dibatalkan (Menunggu pairing/Logout).");
+                return;
             }
+
+            // Reconnect hanya jika sudah pernah login sebelumnya
+            console.log("🔄 Mencoba menyambung ulang dalam 5 detik...");
+            setTimeout(() => startBot(), 5000);
         } else if (connection === "open") {
-            console.log("✅ BOT TERHUBUNG!");
+            console.log("✅ BOT BERHASIL TERHUBUNG KE WHATSAPP!");
         }
     });
 }
 
-startBot();
+// Jalankan bot
+startBot().catch(err => console.error("Fatal Error:", err));
