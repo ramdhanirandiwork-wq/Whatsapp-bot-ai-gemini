@@ -10,18 +10,21 @@ import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import "dotenv/config";
 
-// --- 1. WEB SERVER (WAJIB UNTUK RENDER) ---
+// --- 1. WEB SERVER ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot Status: Online ✅'));
 app.listen(PORT, () => console.log(`🌐 Server running on port ${PORT}`));
 
-// --- 2. KONFIGURASI GEMINI ---
+// --- 2. KONFIGURASI GEMINI (Logika Jawaban Diperbaiki) ---
 const genAI = new GoogleGenerativeAI(process.env.API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash",
+    // Menambahkan instruksi agar AI tahu tugas spesifiknya
+    systemInstruction: "You are the STOCK OPNAME assistant for Kayame Food. Respond with clear stock reports based on user input. If user says 'p' or 'cek stok', ask for today's report."
+});
 
 async function startBot() {
-    // Menggunakan folder 'auth' untuk menyimpan session
     const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
@@ -29,42 +32,41 @@ async function startBot() {
         version,
         auth: {
             creds: state.creds,
-            // Cache untuk mempercepat koneksi dan mengurangi error 428
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
         },
-        printQRInTerminal: false, // Kita gunakan Pairing Code
+        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        // Identitas browser agar tidak dianggap spam
         browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
-    // --- 3. LOGIKA PAIRING CODE ---
+    // --- 3. LOGIKA PAIRING CODE (Log Nomor HP Ditambahkan) ---
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
         if (!phoneNumber) {
-            console.error("❌ ERROR: Isi WA_NUMBER di Environment Variables Render!");
+            console.error("❌ ERROR: WA_NUMBER kosong di Environment Variables!");
             return;
         }
 
-        // Delay 6 detik agar koneksi socket stabil sebelum minta kode
+        // Penambahan Log Nomor HP yang sedang dikoneksikan
+        console.log(`⏳ Menyiapkan koneksi untuk nomor: ${phoneNumber}...`);
+
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
                 console.log("\n========================================");
+                console.log(`🔥 CONNECT TO HP NO: ${phoneNumber}`); // Log No HP sesuai permintaan Anda
                 console.log(`🔥 KODE PAIRING ANDA: ${code}`);
                 console.log("========================================\n");
-                console.log("⚠️ Masukkan kode ini di WhatsApp: Perangkat Tertaut > Tautkan Nomor.");
             } catch (err) {
-                console.error("❌ Gagal mendapatkan kode pairing. Coba Restart.");
+                console.error("❌ Gagal generate kode. WhatsApp limit atau koneksi tidak stabil.");
             }
-        }, 6000);
+        }, 10000); // Jeda 10 detik agar sistem benar-benar siap
     }
 
-    // Simpan kredensial setiap ada perubahan
     sock.ev.on("creds.update", saveCreds);
 
-    // --- 4. HANDLER PESAN (AI) ---
+    // --- 4. HANDLER PESAN (Logika Aman) ---
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg: WAMessage = messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -73,48 +75,44 @@ async function startBot() {
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
         
         if (!text) return;
-        console.log(`📩 Pesan masuk: ${text}`);
+        console.log(`📩 Pesan masuk dari ${jid}: ${text}`);
 
         try {
-            // Berikan efek "Typing..."
             await sock.sendPresenceUpdate("composing", jid);
 
-            const result = await model.generateContent(text);
-            const responseText = result.response.text();
-
-            await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
-        } catch (error) {
-            console.error("❌ Gemini Error:", error);
-            await sock.sendMessage(jid, { text: "Maaf, sistem sedang sibuk. Coba lagi nanti ya! 🙏" });
-        }
-    });
-
-    // --- 5. HANDLER KONEKSI (ANTI-LOOP) ---
-    sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === "close") {
-            const error = (lastDisconnect?.error as any);
-            const statusCode = error?.output?.statusCode || error?.statusCode;
-
-            console.log(`❌ Koneksi Terputus (Status: ${statusCode})`);
-
-            // Jangan reconnect otomatis jika:
-            // 1. Sedang proses pairing (biar tidak double code)
-            // 2. User logout sengaja
-            if (statusCode === DisconnectReason.loggedOut || !state.creds.registered) {
-                console.log("⛔ Reconnect dibatalkan (Menunggu pairing/Logout).");
+            // Logika sederhana: Jika 'p', jangan kirim ke AI, langsung balas template
+            if (text.toLowerCase() === "p" || text.toLowerCase() === "cek stok") {
+                await sock.sendMessage(jid, { text: "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:" });
                 return;
             }
 
-            // Reconnect hanya jika sudah pernah login sebelumnya
-            console.log("🔄 Mencoba menyambung ulang dalam 5 detik...");
-            setTimeout(() => startBot(), 5000);
+            // Selain itu, biarkan AI yang memproses
+            const result = await model.generateContent(text);
+            const responseText = result.response.text();
+
+            if (responseText) {
+                await sock.sendMessage(jid, { text: responseText }, { quoted: msg });
+            }
+        } catch (error) {
+            console.error("❌ Gemini Error:", error);
+        }
+    });
+
+    // --- 5. HANDLER KONEKSI ---
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "close") {
+            const statusCode = (lastDisconnect?.error as any)?.output?.statusCode || (lastDisconnect?.error as any)?.statusCode;
+            console.log(`❌ Terputus (Status: ${statusCode})`);
+
+            if (statusCode !== DisconnectReason.loggedOut) {
+                console.log("🔄 Reconnecting...");
+                setTimeout(() => startBot(), 5000);
+            }
         } else if (connection === "open") {
             console.log("✅ BOT BERHASIL TERHUBUNG KE WHATSAPP!");
         }
     });
 }
 
-// Jalankan bot
 startBot().catch(err => console.error("Fatal Error:", err));
