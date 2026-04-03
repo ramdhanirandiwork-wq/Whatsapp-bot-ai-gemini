@@ -1,3 +1,5 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 import makeWASocket, {
     DisconnectReason,
     useMultiFileAuthState,
@@ -12,20 +14,20 @@ import "dotenv/config";
 
 // ================== CONFIG ==================
 const OWNER_NUMBER = "6283109862325@s.whatsapp.net";
-const PORT = process.env.PORT || 3000;
 
-// ================== EXPRESS ==================
+// ================== EXPRESS (FIX RENDER PORT) ==================
 const app = express();
+const PORT = Number(process.env.PORT) || 3000;
 
 app.get("/", (req, res) => {
-    res.send("Bot WhatsApp Gemini Online ✅");
+    res.status(200).send("Bot WhatsApp Gemini Online ✅");
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`🌐 Server running on port ${PORT}`);
 });
 
-// 🔥 KEEP ALIVE (ANTI SLEEP RENDER FREE)
+// 🔥 KEEP ALIVE (ANTI SLEEP)
 setInterval(() => {
     console.log("🟢 KEEP ALIVE...");
 }, 25000);
@@ -38,6 +40,8 @@ const model = genAI.getGenerativeModel({
 
 // ================== START BOT ==================
 async function startBot() {
+    console.log("🚀 Memulai bot...");
+
     const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
@@ -52,7 +56,7 @@ async function startBot() {
         browser: ["Ubuntu", "Chrome", "20.0.0"]
     });
 
-    // ================== PAIRING ==================
+    // ================== PAIRING CEPAT ==================
     if (!sock.authState.creds.registered) {
         const phoneNumber = process.env.WA_NUMBER;
 
@@ -64,7 +68,7 @@ async function startBot() {
 
                 console.log("\n===============================");
                 console.log(`🔥 PAIRING CODE: ${code}`);
-                console.log("⚠️ SEGERA INPUT DI WHATSAPP (<=20 DETIK)");
+                console.log("⚠️ MASUKKAN KE WHATSAPP (<=20 DETIK)");
                 console.log("===============================\n");
 
             } catch (err) {
@@ -89,7 +93,7 @@ async function startBot() {
         if (!text) return;
 
         try {
-            // COMMAND MANUAL
+            // COMMAND
             if (text.toLowerCase() === "p" || text.toLowerCase() === "cek stok") {
                 await sock.sendMessage(jid, {
                     text: "STOCK LAPORAN KAYAME FOOD\nSilakan input laporan hari ini:"
@@ -113,7 +117,7 @@ async function startBot() {
         }
     });
 
-    // ================== CONNECTION ==================
+    // ================== CONNECTION HANDLER ==================
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
 
@@ -128,14 +132,13 @@ async function startBot() {
                 console.log("🔄 Reconnecting...");
                 setTimeout(() => startBot(), 3000);
             } else {
-                console.log("⛔ Logout, pairing ulang diperlukan");
+                console.log("⛔ Logout, perlu pairing ulang");
             }
         }
 
         if (connection === "open") {
             console.log("✅ BOT TERHUBUNG!");
 
-            // 🔥 NOTIF KE NOMOR KAMU
             await sock.sendMessage(OWNER_NUMBER, {
                 text: "🚀 Bot WhatsApp Gemini aktif & sudah connect!"
             });
