@@ -7,6 +7,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
+import qrcode from "qrcode-terminal";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,36 +23,39 @@ app.listen(PORT, () => {
 
 // ================= BOT CORE =================
 
-// Variabel untuk menyimpan instance socket agar tidak terjadi double running
 let sock: any = null;
 
 async function startBot() {
   console.log("🚀 Memulai bot...");
 
-  // Logger diturunkan levelnya agar log Render tidak penuh
   const logger = pino({ level: "silent" });
   const { state, saveCreds } = await useMultiFileAuthState("session");
   const { version } = await fetchLatestBaileysVersion();
 
-  // Inisialisasi Socket
   sock = makeWASocket({
     version,
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    printQRInTerminal: false,
+    printQRInTerminal: false, // kita pakai qrcode-terminal
     browser: ["Terminal Lama", "Chrome", "1.0.0"],
     syncFullHistory: false,
     logger
   });
 
-  // Simpan session secara otomatis
+  // Simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  // Penanganan Koneksi
+  // ================= CONNECTION HANDLER =================
   sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+
+    // QR CODE
+    if (qr) {
+      console.log("\n📱 Scan QR berikut di WhatsApp:\n");
+      qrcode.generate(qr, { small: true });
+    }
 
     if (connection === "connecting") {
       console.log("⏳ Menghubungkan ke WhatsApp...");
@@ -59,60 +63,73 @@ async function startBot() {
 
     if (connection === "open") {
       console.log("✅ BOT TERHUBUNG!");
-      
-      // Kirim notifikasi aktif
-      await sock.sendMessage("6283109862325@s.whatsapp.net", {
-        text: "✅ Asisten Inventaris Terminal Lama berhasil aktif 🚀"
-      });
+
+      // ================= DEVICE INFO =================
+      try {
+        const user = sock.user;
+
+        if (user) {
+          console.log("\n📡 STATUS DEVICE:");
+          console.log(`👤 Nama: ${user.name || "-"}`);
+          console.log(`📱 Nomor: ${user.id.split(":")[0]}`);
+
+          // NOTE: Baileys tidak bisa ambil jumlah device real
+          // Kita kasih simulasi info multi device
+          console.log("📊 Status: Terhubung ke WhatsApp Multi-Device");
+
+          console.log("\n✅ Device aktif & siap digunakan\n");
+        } else {
+          console.log("⚠️ Belum terkoneksi ke device manapun");
+        }
+      } catch (err) {
+        console.log("⚠️ Gagal membaca info device");
+      }
+
+      // ================= NOTIF KE NOMOR KAMU =================
+      try {
+        await sock.sendMessage("628310982325@s.whatsapp.net", {
+          text: "✅ Bot WhatsApp berhasil ON & LIVE 🚀\n\nStatus: Aktif dan siap digunakan!"
+        });
+      } catch (err) {
+        console.log("❌ Gagal kirim notifikasi ke WhatsApp kamu");
+      }
     }
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      console.log(`❌ Koneksi terputus (Reason: ${statusCode}). Reconnect: ${shouldReconnect}`);
+      console.log(`❌ Koneksi terputus (Reason: ${statusCode})`);
 
       if (shouldReconnect) {
-        // Jeda 10 detik sebelum restart untuk menghindari spamming di Render
+        console.log("🔄 Reconnecting dalam 10 detik...");
         setTimeout(startBot, 10000);
       } else {
-        console.log("⚠️ Sesi Logout. Silakan hapus folder 'session' dan pairing ulang.");
+        console.log("⚠️ Logout! Hapus folder 'session' lalu scan ulang QR.");
       }
     }
   });
 
-  // Logika Pairing Code
-  if (!sock.authState.creds.registered) {
-    console.log("🔥 Menyiapkan permintaan Pairing Code...");
-    
-    // Jeda agar socket benar-benar siap sebelum minta code
-    setTimeout(async () => {
-      try {
-        const phoneNumber = "6281399941143";
-        const code = await sock.requestPairingCode(phoneNumber);
-        
-        console.log("\n" + "=".repeat(40));
-        console.log(`📱 NOMOR HP: ${phoneNumber}`);
-        console.log(`🔑 KODE PAIRING: ${code}`);
-        console.log("=".repeat(40) + "\n");
-      } catch (err) {
-        console.log("❌ Gagal mendapatkan Pairing Code. Coba lagi dalam 10 detik...");
-        // Jangan panggil startBot() di sini agar tidak looping socket
-      }
-    }, 10000); 
-  }
-
-  // Handler Pesan (Tempatkan logika Gemini Kayame Food di sini)
+  // ================= MESSAGE HANDLER =================
   sock.ev.on("messages.upsert", async (m: any) => {
     const msg = m.messages[0];
     if (!msg.message || msg.key.fromMe) return;
-    
-    // Debug pesan masuk
-    // console.log(`📩 Pesan dari ${msg.key.remoteJid}: ${msg.message.conversation}`);
+
+    const from = msg.key.remoteJid;
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text;
+
+    console.log(`📩 ${from} : ${text}`);
+
+    // contoh respon
+    if (text?.toLowerCase() === "ping") {
+      await sock.sendMessage(from, { text: "pong 🏓" });
+    }
   });
 
   return sock;
 }
 
-// Jalankan pertama kali
+// Jalankan bot
 startBot();
