@@ -10,10 +10,12 @@
     "@whiskeysockets/baileys": "6.6.0",
     "express": "^4.19.2",
     "qrcode": "^1.5.4",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "@types/node": "18.19.0",
+    "@types/qrcode": "^1.5.5",
     "typescript": "5.2.2"
   }
 }
