@@ -9,7 +9,7 @@ import { Boom } from "@hapi/boom";
 import pino from "pino";
 import fs from "fs";
 
-// 🔥 FIX QR (ANTI ERROR TYPESCRIPT)
+// 🔥 FIX QR TANPA ERROR TYPES
 const QRCode = require("qrcode");
 
 const app = express();
@@ -26,26 +26,55 @@ let currentQR: string | null = null;
 app.get("/qr", async (req, res) => {
   try {
     if (!currentQR) {
-      return res.send("QR belum tersedia / sudah connect");
+      return res.send(`
+        <html>
+          <body style="text-align:center;font-family:sans-serif">
+            <h2>✅ Sudah Terhubung</h2>
+            <p>QR tidak tersedia</p>
+          </body>
+        </html>
+      `);
     }
 
-    const qrImage = await QRCode.toDataURL(currentQR);
+    const qrImage = await QRCode.toDataURL(currentQR, {
+      width: 400,
+      margin: 2
+    });
 
     res.send(`
       <html>
         <head>
           <title>QR WhatsApp</title>
-          <meta http-equiv="refresh" content="5">
+          <meta http-equiv="refresh" content="3">
         </head>
-        <body style="text-align:center">
-          <h2>Scan QR WhatsApp</h2>
-          <img src="${qrImage}" />
-          <p>Auto refresh 5 detik</p>
+        <body style="
+          display:flex;
+          justify-content:center;
+          align-items:center;
+          height:100vh;
+          background:#111;
+          color:white;
+          font-family:sans-serif;
+          flex-direction:column;
+        ">
+          <h2>📱 Scan QR WhatsApp</h2>
+
+          <div style="
+            background:white;
+            padding:20px;
+            border-radius:20px;
+          ">
+            <img src="${qrImage}" />
+          </div>
+
+          <p style="margin-top:10px;font-size:14px;opacity:0.7">
+            Auto refresh 3 detik
+          </p>
         </body>
       </html>
     `);
   } catch {
-    res.send("Gagal generate QR");
+    res.send("❌ Gagal generate QR");
   }
 });
 
@@ -91,6 +120,10 @@ async function startBot() {
       console.log("📱 QR tersedia di /qr");
     }
 
+    if (connection === "connecting") {
+      console.log("⏳ Menghubungkan...");
+    }
+
     if (connection === "open") {
       console.log("✅ BOT TERHUBUNG!");
 
@@ -98,9 +131,10 @@ async function startBot() {
       if (user) {
         console.log(`📱 Connected: ${user.id.split(":")[0]}`);
       } else {
-        console.log("⚠️ Belum ada device");
+        console.log("⚠️ Belum terkoneksi ke device");
       }
 
+      // notif ke nomor kamu
       await sock.sendMessage("628310982325@s.whatsapp.net", {
         text: "✅ Bot ON & LIVE 🚀"
       });
@@ -115,12 +149,15 @@ async function startBot() {
       console.log(`❌ Disconnect (${statusCode})`);
 
       if (shouldReconnect) {
+        console.log("🔄 Reconnect 10 detik...");
         setTimeout(startBot, 10000);
+      } else {
+        console.log("⚠️ Logout, scan ulang QR");
       }
     }
   });
 
-  // ================= SYSTEM =================
+  // ================= SYSTEM REPORT =================
   function getTomorrowDate() {
     const hari = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
     const d = new Date();
