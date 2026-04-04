@@ -8,7 +8,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-import QRCode from "qrcode";
+const QRCode = require("qrcode");
 
 // SYSTEM
 import { generateReport } from "./system/inventory";
@@ -20,11 +20,11 @@ const PORT = process.env.PORT || 3000;
 
 let currentQR: string | null = null;
 let sock: any = null;
-let isStarting = false;
+let isConnected = false;
 
 // ================= WEB =================
 app.get("/", (req, res) => {
-  res.send("🤖 BOT ONLINE 24 JAM");
+  res.send("🤖 BOT ONLINE");
 });
 
 app.get("/qr", async (req, res) => {
@@ -40,9 +40,6 @@ app.listen(PORT, () => {
 
 // ================= BOT =================
 async function startBot() {
-  if (isStarting) return;
-  isStarting = true;
-
   console.log("🚀 Memulai bot...");
 
   const logger = pino({ level: "silent" });
@@ -65,49 +62,51 @@ async function startBot() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // ================= QR =================
     if (qr) {
       currentQR = qr;
       console.log("📱 QR siap di /qr");
     }
 
-    // ================= CONNECTED =================
     if (connection === "open") {
-      console.log("✅ BOT TERHUBUNG!");
+      isConnected = true;
       currentQR = null;
-      isStarting = false;
 
-      const number = sock.user?.id?.split(":")[0];
-      console.log("📱 Nomor:", number);
+      console.log("✅ BOT TERHUBUNG!");
 
-      // NOTIF WA
       await sock.sendMessage("6283109862325@s.whatsapp.net", {
-        text: `🟢 BOT AKTIF\nNomor: ${number}`
+        text: "🟢 Server Aktif & Bot Siap Digunakan"
       });
     }
 
-    // ================= DISCONNECT =================
     if (connection === "close") {
-      isStarting = false;
+      isConnected = false;
 
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
-      console.log(`❌ Disconnect (${code})`);
+      console.log("❌ Disconnect:", code);
 
       if (code !== DisconnectReason.loggedOut) {
-        console.log("🔄 Reconnect 15 detik...");
-        setTimeout(startBot, 15000);
+        console.log("🔄 Reconnect 10 detik...");
+        setTimeout(startBot, 10000);
       } else {
-        console.log("⚠️ Logout! Hapus session & scan ulang");
+        console.log("⚠️ Logout! Scan ulang QR");
       }
     }
   });
+
+  // ================= KEEP ALIVE =================
+  setInterval(() => {
+    if (sock && isConnected) {
+      console.log("💓 KEEP ALIVE");
+    }
+  }, 30000);
 
   // ================= MESSAGE =================
   sock.ev.on("messages.upsert", async (m: any) => {
     try {
       const msg = m.messages[0];
-      if (!msg.message || msg.key.fromMe) return;
+      if (!msg.message) return;
+      if (msg.key.fromMe) return;
 
       const from = msg.key.remoteJid;
 
@@ -115,8 +114,6 @@ async function startBot() {
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
         "";
-
-      if (!text) return;
 
       console.log("📩", text);
 
@@ -126,12 +123,12 @@ async function startBot() {
 
         if (!q) {
           await sock.sendMessage(from, {
-            text: "❌ Pertanyaan kosong"
+            text: "❌ Masukkan pertanyaan setelah AI29"
           });
           return;
         }
 
-        // GAMBAR hanya jika diminta
+        // 🔥 GAMBAR hanya jika diminta
         if (isImageRequest(q)) {
           const url = getImageUrl(q);
 
@@ -142,7 +139,6 @@ async function startBot() {
           return;
         }
 
-        // AI TEXT
         const ai = await askGemini(q);
 
         await sock.sendMessage(from, { text: ai });
@@ -151,10 +147,7 @@ async function startBot() {
 
       // ================= INVENTORY =================
       const result = generateReport(text);
-
-      await sock.sendMessage(from, {
-        text: result
-      });
+      await sock.sendMessage(from, { text: result });
 
     } catch (err) {
       console.log("❌ ERROR MESSAGE:", err);
