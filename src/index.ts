@@ -7,8 +7,8 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-import qrcode from "qrcode-terminal";
 import fs from "fs";
+import QRCode from "qrcode";
 
 // ================= SERVER =================
 const app = express();
@@ -18,6 +18,35 @@ app.get("/", (req, res) => {
   res.status(200).send("🤖 Bot Terminal Lama Aktif!");
 });
 
+// 🔥 ENDPOINT QR WEB
+let currentQR: string | null = null;
+
+app.get("/qr", async (req, res) => {
+  try {
+    if (!currentQR) {
+      return res.send("QR belum tersedia atau sudah terhubung.");
+    }
+
+    const qrImage = await QRCode.toDataURL(currentQR);
+
+    res.send(`
+      <html>
+        <head>
+          <title>Scan QR WhatsApp</title>
+          <meta http-equiv="refresh" content="5">
+        </head>
+        <body style="text-align:center;font-family:sans-serif">
+          <h2>📱 Scan QR WhatsApp</h2>
+          <img src="${qrImage}" />
+          <p>Auto refresh setiap 5 detik</p>
+        </body>
+      </html>
+    `);
+  } catch {
+    res.send("❌ Gagal generate QR");
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🌐 Server running on port ${PORT}`);
 });
@@ -25,7 +54,7 @@ app.listen(PORT, () => {
 // ================= BOT CORE =================
 let sock: any = null;
 
-// 🔥 SOLUSI #1 (AUTO DELETE SESSION)
+// 🔥 AUTO DELETE SESSION (SOLUSI #1)
 if (fs.existsSync("./session")) {
   fs.rmSync("./session", { recursive: true, force: true });
   console.log("🧹 Session lama dihapus");
@@ -57,8 +86,12 @@ async function startBot() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log("\n📱 Scan QR berikut:\n");
-      qrcode.generate(qr, { small: true });
+      currentQR = qr;
+      console.log("📱 QR tersedia di /qr");
+    }
+
+    if (connection === "connecting") {
+      console.log("⏳ Menghubungkan...");
     }
 
     if (connection === "open") {
@@ -71,10 +104,12 @@ async function startBot() {
         console.log("⚠️ Belum terkoneksi ke device manapun");
       }
 
-      // notif ke kamu
+      // kirim notif ke kamu
       await sock.sendMessage("628310982325@s.whatsapp.net", {
         text: "✅ Bot ON & LIVE 🚀"
       });
+
+      currentQR = null; // QR hilang setelah connect
     }
 
     if (connection === "close") {
@@ -84,9 +119,10 @@ async function startBot() {
       console.log(`❌ Disconnect (${statusCode})`);
 
       if (shouldReconnect) {
+        console.log("🔄 Reconnect 10 detik...");
         setTimeout(startBot, 10000);
       } else {
-        console.log("⚠️ Logout. Scan ulang QR.");
+        console.log("⚠️ Logout. Scan ulang QR di /qr");
       }
     }
   });
@@ -125,10 +161,9 @@ async function startBot() {
     checklist.push("3. [ ] Bolognes 🍅: 2 Kantong");
     checklist.push("4. [ ] Tar-tar 🥣: 1 Kantong");
 
-    // Saus Kompan logic
     let kompanNeed = (kompan < 0.5) ? "1 Kompan" : "";
     checklist.push(`5. [ ] Saus Kompan 🛢️: ${kompanNeed}`);
-    checklist.push(""); // spacing WAJIB
+    checklist.push("");
 
     let index = 6;
 
