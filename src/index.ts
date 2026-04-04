@@ -8,11 +8,12 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
+import fs from "fs";
 
+// ================= SERVER =================
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Anti Render Timeout
 app.get("/", (req, res) => {
   res.status(200).send("🤖 Bot Terminal Lama Aktif!");
 });
@@ -22,8 +23,13 @@ app.listen(PORT, () => {
 });
 
 // ================= BOT CORE =================
-
 let sock: any = null;
+
+// 🔥 SOLUSI #1 (AUTO DELETE SESSION)
+if (fs.existsSync("./session")) {
+  fs.rmSync("./session", { recursive: true, force: true });
+  console.log("🧹 Session lama dihapus");
+}
 
 async function startBot() {
   console.log("🚀 Memulai bot...");
@@ -38,77 +44,117 @@ async function startBot() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    printQRInTerminal: false, // kita pakai qrcode-terminal
+    printQRInTerminal: false,
     browser: ["Terminal Lama", "Chrome", "1.0.0"],
     syncFullHistory: false,
     logger
   });
 
-  // Simpan session
   sock.ev.on("creds.update", saveCreds);
 
-  // ================= CONNECTION HANDLER =================
+  // ================= CONNECTION =================
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // QR CODE
     if (qr) {
-      console.log("\n📱 Scan QR berikut di WhatsApp:\n");
+      console.log("\n📱 Scan QR berikut:\n");
       qrcode.generate(qr, { small: true });
-    }
-
-    if (connection === "connecting") {
-      console.log("⏳ Menghubungkan ke WhatsApp...");
     }
 
     if (connection === "open") {
       console.log("✅ BOT TERHUBUNG!");
 
-      // ================= DEVICE INFO =================
-      try {
-        const user = sock.user;
-
-        if (user) {
-          console.log("\n📡 STATUS DEVICE:");
-          console.log(`👤 Nama: ${user.name || "-"}`);
-          console.log(`📱 Nomor: ${user.id.split(":")[0]}`);
-
-          // NOTE: Baileys tidak bisa ambil jumlah device real
-          // Kita kasih simulasi info multi device
-          console.log("📊 Status: Terhubung ke WhatsApp Multi-Device");
-
-          console.log("\n✅ Device aktif & siap digunakan\n");
-        } else {
-          console.log("⚠️ Belum terkoneksi ke device manapun");
-        }
-      } catch (err) {
-        console.log("⚠️ Gagal membaca info device");
+      const user = sock.user;
+      if (user) {
+        console.log(`📱 Connected: ${user.id.split(":")[0]}`);
+      } else {
+        console.log("⚠️ Belum terkoneksi ke device manapun");
       }
 
-      // ================= NOTIF KE NOMOR KAMU =================
-      try {
-        await sock.sendMessage("628310982325@s.whatsapp.net", {
-          text: "✅ Bot WhatsApp berhasil ON & LIVE 🚀\n\nStatus: Aktif dan siap digunakan!"
-        });
-      } catch (err) {
-        console.log("❌ Gagal kirim notifikasi ke WhatsApp kamu");
-      }
+      // notif ke kamu
+      await sock.sendMessage("628310982325@s.whatsapp.net", {
+        text: "✅ Bot ON & LIVE 🚀"
+      });
     }
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      console.log(`❌ Koneksi terputus (Reason: ${statusCode})`);
+      console.log(`❌ Disconnect (${statusCode})`);
 
       if (shouldReconnect) {
-        console.log("🔄 Reconnecting dalam 10 detik...");
         setTimeout(startBot, 10000);
       } else {
-        console.log("⚠️ Logout! Hapus folder 'session' lalu scan ulang QR.");
+        console.log("⚠️ Logout. Scan ulang QR.");
       }
     }
   });
+
+  // ================= SYSTEM PROMPT ENGINE =================
+
+  const TARGET: any = {
+    "Chili Oil": 0.5,
+    "Parsley": 1,
+    "Saus Kompan": 1
+  };
+
+  function getTomorrowDate() {
+    const hari = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+    const now = new Date();
+    now.setDate(now.getDate() + 1);
+
+    return `📅 ${hari[now.getDay()]}, ${now.toLocaleDateString("id-ID")}`;
+  }
+
+  function generateReport(inputText: string) {
+    if (!inputText) {
+      return "STOCK LAPORAN KAYAME FOOD\nSilakan input Laporan Hari ini:";
+    }
+
+    const lower = inputText.toLowerCase();
+
+    let chili = lower.includes("chili") ? 0.2 : 0;
+    let parsley = lower.includes("parsley") ? 0 : 0;
+    let kompan = lower.includes("kompan") ? 0.3 : 0;
+
+    let checklist: string[] = [];
+
+    checklist.push("1. [ ] Dimsum: 600 Pcs");
+    checklist.push("2. [ ] Saus Botol 🧴: 4 Botol");
+    checklist.push("3. [ ] Bolognes 🍅: 2 Kantong");
+    checklist.push("4. [ ] Tar-tar 🥣: 1 Kantong");
+
+    // Saus Kompan logic
+    let kompanNeed = (kompan < 0.5) ? "1 Kompan" : "";
+    checklist.push(`5. [ ] Saus Kompan 🛢️: ${kompanNeed}`);
+    checklist.push(""); // spacing WAJIB
+
+    let index = 6;
+
+    if (chili < TARGET["Chili Oil"]) {
+      checklist.push(`${index++}. [ ] Chili Oil: ${TARGET["Chili Oil"] - chili} Pack`);
+    }
+
+    if (parsley < TARGET["Parsley"]) {
+      checklist.push(`${index++}. [ ] Parsley: ${TARGET["Parsley"] - parsley} Pack`);
+    }
+
+    return `
+\`\`\`
+${getTomorrowDate()}
+*DAFTAR CHECKLIST YANG HARUS DI BAWA TERMINAL LAMA*
+______________________________
+${checklist.join("\n")}
+
+*INFO STOK DI LAPAK TERMINAL LAMA*
+__________________________________________
+• Saus Kompan 🛢️: ${kompan}
+• Chili Oil: ${chili}
+• Parsley: ${parsley}
+\`\`\`
+`;
+  }
 
   // ================= MESSAGE HANDLER =================
   sock.ev.on("messages.upsert", async (m: any) => {
@@ -120,16 +166,12 @@ async function startBot() {
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text;
 
-    console.log(`📩 ${from} : ${text}`);
+    const response = generateReport(text);
 
-    // contoh respon
-    if (text?.toLowerCase() === "ping") {
-      await sock.sendMessage(from, { text: "pong 🏓" });
-    }
+    await sock.sendMessage(from, { text: response });
   });
 
   return sock;
 }
 
-// Jalankan bot
 startBot();
