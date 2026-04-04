@@ -1,16 +1,12 @@
 // ==========================================
-// 🔥 SYSTEM: STOCK OPNAME TERMINAL LAMA
+// 📦 STOCK OPNAME TERMINAL LAMA
 // ==========================================
 
 export function generateReport(text: string): string {
   const lower = text.toLowerCase();
 
-  const isValid =
-    lower.includes("chili") ||
-    lower.includes("parsley") ||
-    lower.includes("kompan");
-
-  if (!isValid) {
+  // ❌ kalau bukan input stok
+  if (!lower.match(/\d/)) {
     return `
 \`\`\`
 STOCK LAPORAN KAYAME FOOD
@@ -19,14 +15,15 @@ Silakan input Laporan Hari ini:
 `;
   }
 
-  let chili = lower.includes("chili") ? 0.2 : 0;
-  let parsley = lower.includes("parsley") ? 0 : 0;
-  let kompan = lower.includes("kompan") ? 0.3 : 0;
-
   const hari = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
   const d = new Date();
   d.setDate(d.getDate() + 1);
+
   const tanggal = `📅 ${hari[d.getDay()]}, ${d.toLocaleDateString("id-ID")}`;
+
+  const chili = extract(lower, "chili");
+  const parsley = extract(lower, "parsley");
+  const kompan = extract(lower, "kompan");
 
   let list: string[] = [];
 
@@ -35,18 +32,18 @@ Silakan input Laporan Hari ini:
   list.push("3. [ ] Bolognes 🍅: 2 Kantong");
   list.push("4. [ ] Tar-tar 🥣: 1 Kantong");
 
-  let kompanNeed = (kompan < 0.5) ? "1 Kompan" : "";
+  const kompanNeed = kompan < 0.5 ? "1 Kompan" : "";
   list.push(`5. [ ] Saus Kompan 🛢️: ${kompanNeed}`);
   list.push("");
 
   let no = 6;
 
   if (chili < 0.5) {
-    list.push(`${no++}. [ ] Chili Oil: ${0.5 - chili} Pack`);
+    list.push(`${no++}. [ ] Chili Oil: ${(0.5 - chili).toFixed(2)} Pack`);
   }
 
   if (parsley < 1) {
-    list.push(`${no++}. [ ] Parsley: ${1 - parsley} Pack`);
+    list.push(`${no++}. [ ] Parsley: ${(1 - parsley).toFixed(2)} Pack`);
   }
 
   return `
@@ -63,4 +60,10 @@ __________________________________________
 • Parsley: ${parsley}
 \`\`\`
 `;
+}
+
+function extract(text: string, key: string): number {
+  const r = new RegExp(`${key}\\s*(\\d+(\\.\\d+)?)`);
+  const m = text.match(r);
+  return m ? parseFloat(m[1]) : 0;
 }
