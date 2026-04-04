@@ -1,34 +1,35 @@
+// ==========================================
+// 🤖 GEMINI AI LEVEL DEWA
+// ==========================================
+
 import axios from "axios";
 
-const API_KEY = "AIzaSyB1KU5A8gX9F-87BsYOmMfxPfU7Bshlhcg";
+const API_KEY = "ISI_API_KEY_KAMU"; // 🔥 WAJIB
 
-export async function askGemini(prompt: string) {
+export async function askGemini(prompt: string): Promise<string> {
   try {
     const res = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${API_KEY}`,
       {
-        contents: [{ parts: [{ text: prompt }] }]
+        contents: [
+          {
+            parts: [
+              {
+                text: `Jawab dengan jelas, singkat, dan cerdas:\n${prompt}`
+              }
+            ]
+          }
+        ]
       }
     );
 
-    const text =
-      res.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    return text;
+    return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "❌ Tidak ada respon";
   } catch {
     return "❌ AI Error";
   }
 }
 
-// 🔥 DETEKSI PERINTAH GAMBAR
+// 🔥 HANYA TRIGGER GAMBAR
 export function isImageRequest(text: string): boolean {
-  const trigger = [
-    "gambar",
-    "foto",
-    "image",
-    "buat gambar",
-    "generate image"
-  ];
-
-  return trigger.some(t => text.toLowerCase().includes(t));
+  return text.toLowerCase().includes("gambarkan");
 }
