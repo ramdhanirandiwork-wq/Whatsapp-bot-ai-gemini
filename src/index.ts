@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import makeWASocket, {
   useMultiFileAuthState,
@@ -7,8 +8,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-
-const QRCode = require("qrcode");
+import QRCode from "qrcode";
 
 // SYSTEM
 import { generateReport } from "./system/inventory";
@@ -20,11 +20,11 @@ const PORT = process.env.PORT || 3000;
 
 let currentQR: string | null = null;
 let sock: any = null;
-let isConnected = false;
+let isStarting = false;
 
 // ================= WEB =================
 app.get("/", (req, res) => {
-  res.send("🤖 BOT ONLINE");
+  res.send("🤖 BOT ONLINE 24 JAM");
 });
 
 app.get("/qr", async (req, res) => {
@@ -40,6 +40,11 @@ app.listen(PORT, () => {
 
 // ================= BOT =================
 async function startBot() {
+  if (isStarting) return;
+  isStarting = true;
+
+  console.log("🚀 Memulai bot...");
+
   const logger = pino({ level: "silent" });
   const { state, saveCreds } = await useMultiFileAuthState("session");
   const { version } = await fetchLatestBaileysVersion();
@@ -60,69 +65,100 @@ async function startBot() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
+    // ================= QR =================
     if (qr) {
       currentQR = qr;
-      console.log("📱 QR di /qr");
+      console.log("📱 QR siap di /qr");
     }
 
+    // ================= CONNECTED =================
     if (connection === "open") {
-      isConnected = true;
-      console.log("✅ CONNECTED");
+      console.log("✅ BOT TERHUBUNG!");
+      currentQR = null;
+      isStarting = false;
 
+      const number = sock.user?.id?.split(":")[0];
+      console.log("📱 Nomor:", number);
+
+      // NOTIF WA
       await sock.sendMessage("6283109862325@s.whatsapp.net", {
-        text: "🟢 Bot aktif & siap"
+        text: `🟢 BOT AKTIF\nNomor: ${number}`
       });
     }
 
+    // ================= DISCONNECT =================
     if (connection === "close") {
-      isConnected = false;
+      isStarting = false;
 
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
+      console.log(`❌ Disconnect (${code})`);
+
       if (code !== DisconnectReason.loggedOut) {
+        console.log("🔄 Reconnect 15 detik...");
         setTimeout(startBot, 15000);
       } else {
-        console.log("⚠️ Logout scan ulang");
+        console.log("⚠️ Logout! Hapus session & scan ulang");
       }
     }
   });
 
   // ================= MESSAGE =================
   sock.ev.on("messages.upsert", async (m: any) => {
-    const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+    try {
+      const msg = m.messages[0];
+      if (!msg.message || msg.key.fromMe) return;
 
-    const from = msg.key.remoteJid;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      "";
+      const from = msg.key.remoteJid;
 
-    // ================= AI29 =================
-    if (text.startsWith("AI29")) {
-      const q = text.replace("AI29", "").trim();
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        "";
 
-      // 🔥 GAMBAR HANYA JIKA "gambarkan"
-      if (isImageRequest(q)) {
-        const url = getImageUrl(q);
+      if (!text) return;
 
-        await sock.sendMessage(from, {
-          image: { url },
-          caption: `🖼️ ${q}`
-        });
+      console.log("📩", text);
+
+      // ================= AI29 =================
+      if (text.startsWith("AI29")) {
+        const q = text.replace("AI29", "").trim();
+
+        if (!q) {
+          await sock.sendMessage(from, {
+            text: "❌ Pertanyaan kosong"
+          });
+          return;
+        }
+
+        // GAMBAR hanya jika diminta
+        if (isImageRequest(q)) {
+          const url = getImageUrl(q);
+
+          await sock.sendMessage(from, {
+            image: { url },
+            caption: `🖼️ ${q}`
+          });
+          return;
+        }
+
+        // AI TEXT
+        const ai = await askGemini(q);
+
+        await sock.sendMessage(from, { text: ai });
         return;
       }
 
-      // 🔥 TEXT AI
-      const ai = await askGemini(q);
+      // ================= INVENTORY =================
+      const result = generateReport(text);
 
-      await sock.sendMessage(from, { text: ai });
-      return;
+      await sock.sendMessage(from, {
+        text: result
+      });
+
+    } catch (err) {
+      console.log("❌ ERROR MESSAGE:", err);
     }
-
-    // ================= INVENTORY =================
-    const result = generateReport(text);
-    await sock.sendMessage(from, { text: result });
   });
 }
 
