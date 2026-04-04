@@ -1,10 +1,23 @@
 // ==========================================
-// 🤖 GEMINI AI LEVEL DEWA
+// 🤖 GEMINI AI LEVEL DEWA (FINAL VERSION)
 // ==========================================
 
 import axios from "axios";
 
-const API_KEY = "ISI_API_KEY_KAMU"; // 🔥 WAJIB
+// 🔥 API KEY KAMU
+const API_KEY = "AIzaSyC5klc0Vv3WAhSBHwdU_c4y-dgVnZgLHCQ";
+
+// 🔥 SYSTEM PROMPT (BIAR PINTAR & TERARAH)
+const SYSTEM_PROMPT = `
+Kamu adalah AI super cerdas, cepat, dan akurat.
+- Jawaban harus jelas, padat, dan bernilai.
+- Jangan bertele-tele.
+- Gunakan bahasa yang mudah dipahami.
+- Jika ditanya teknis → jawab detail.
+- Jika ditanya umum → jawab ringkas tapi informatif.
+- Jika diminta langkah → beri step by step.
+- Jika tidak tahu → bilang jujur, jangan ngarang.
+`;
 
 export async function askGemini(prompt: string): Promise<string> {
   try {
@@ -15,21 +28,41 @@ export async function askGemini(prompt: string): Promise<string> {
           {
             parts: [
               {
-                text: `Jawab dengan jelas, singkat, dan cerdas:\n${prompt}`
+                text: `${SYSTEM_PROMPT}\n\nUser: ${prompt}`
               }
             ]
           }
-        ]
+        ],
+        generationConfig: {
+          temperature: 0.7, // kreatif tapi masih akurat
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 1000
+        }
       }
     );
 
-    return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "❌ Tidak ada respon";
-  } catch {
-    return "❌ AI Error";
+    const text =
+      res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    return text || "❌ Tidak ada respon dari AI";
+  } catch (err: any) {
+    console.log("🔥 GEMINI ERROR:", err?.response?.data || err.message);
+    return "❌ AI Error (cek log server)";
   }
 }
 
-// 🔥 HANYA TRIGGER GAMBAR
+// ==========================================
+// 🎯 DETEKSI GAMBAR (ONLY IF REQUESTED)
+// ==========================================
+
 export function isImageRequest(text: string): boolean {
-  return text.toLowerCase().includes("gambarkan");
+  const trigger = text.toLowerCase();
+
+  return (
+    trigger.includes("gambarkan") ||
+    trigger.includes("buat gambar") ||
+    trigger.includes("generate image") ||
+    trigger.includes("buatkan gambar")
+  );
 }
