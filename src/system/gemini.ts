@@ -5,7 +5,7 @@
 import axios from "axios";
 
 // 🔥 API KEY KAMU
-const API_KEY = "AIzaSyC5klc0Vv3WAhSBHwdU_c4y-dgVnZgLHCQ";
+const API_KEY = "AIzaSyB1KU5A8gX9F-87BsYOmMfxPfU7Bshlhcg";
 
 // 🔥 SYSTEM PROMPT (BIAR PINTAR & TERARAH)
 const SYSTEM_PROMPT = `
